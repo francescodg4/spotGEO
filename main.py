@@ -3,6 +3,7 @@ import datetime
 import skimage
 import cv2
 import numpy as np
+from skimage.registration import phase_cross_correlation
 
 DATASET_PATH = "./spotGEO/train/{0}/{1}.png"
 
@@ -50,36 +51,44 @@ def read_image(path: str, sequence: int, frame: int):
 def denoising(image: np.ndarray):
     gX = cv2.Sobel(image, cv2.CV_64F, 1, 0, ksize=5)
     gY = cv2.Sobel(image, cv2.CV_64F, 0, 1, ksize=5)
+
     magnitude = np.sqrt(gX**2 + gY**2)
     magnitude = cv2.normalize(
         magnitude, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8UC1
     )
-    output = cv2.GaussianBlur(magnitude, (5, 5), 0)
-    # output = cv2.GaussianBlur(magnitude, (5, 5), 0)
-    # return output
 
-    return output
+    return cv2.GaussianBlur(magnitude, (5, 5), 0)
 
 
-def max_stack(indexes, frames):
+def align_stack(indexes, frames):
     stack = []
 
     for index, frame in zip(indexes, frames):
-        if index == 1:
-            dr, dc = 0, 0
-        elif index == 2:
-            dr, dc = 35, -5
-        elif index == 3:
-            dr, dc = 72, -10
-        elif index == 4:
-            dr, dc = 110, -15
-        elif index == 5:
-            dr, dc = 145, -20
+        if index == 3:
+            d_row, d_col = (0, 0)
         else:
-            dr, dc = 0, 0
-        stack.append(larger(frame, d_row=dr, d_col=dc))
+            shift, error, _ = phase_cross_correlation(frames[2], frame)
+            d_row, d_col = np.round(shift)
 
-    return np.max(stack, axis=0)
+        stack.append(larger(frame, d_row=int(d_row), d_col=int(d_col)))
+
+    return stack
+
+
+def compute_sequence_alignment(indexes, frames):
+    """Compute the alignment d_row, d_col offsets to align the images to the central frame"""
+    alignment = []
+
+    for index, frame in zip(indexes, frames):
+        if index == 3:
+            d_row, d_col = (0, 0)
+        else:
+            shift, error, _ = phase_cross_correlation(frames[2], frame)
+            d_row, d_col = np.round(shift)
+
+        alignment.append((d_row, d_col))
+
+    return alignment
 
 
 def test_multiple_noise_reduction():
@@ -128,18 +137,23 @@ def test_multiple_noise_reduction():
 def main():
     import matplotlib.pyplot as plt
 
-    sequence = [read_image(DATASET_PATH, sequence=1, frame=fr) for fr in range(1, 6)]
-    sequence = [denoising(image) for image in sequence]
-    sequence = [np.uint8(image) for image in sequence]
+    sequence_index = 125
 
-    merged = max_stack(range(1, 6), sequence)
+    sequence = [read_image(DATASET_PATH, sequence=sequence_index, frame=fr) for fr in range(1, 6)]
+    alignment = compute_sequence_alignment(range(1, 6), sequence)
 
-    # Test multiple
-    # test_multiple_noise_reduction()
+    aligned_frames = []
+
+    for frame, (d_row, d_col) in zip(sequence, alignment):
+        frame = np.uint8(denoising(frame))
+        aligned_frame = larger(frame, int(d_row), int(d_col))
+        aligned_frames.append(aligned_frame)
+
+    merged = np.sort(aligned_frames, axis=0)
 
     import matplotlib.pyplot as plt
 
-    plt.imshow(merged)
+    plt.imshow(merged[-1] - merged[-2])
     plt.show()
 
 
